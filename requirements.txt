@@ -1,0 +1,9 @@
+polars
+pyarrow
+openpyxl
+schedule
+streamlit
+
+# dash based
+dash
+dash-bootstrap-components
