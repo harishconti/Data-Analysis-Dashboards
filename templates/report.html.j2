@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0; background-color: #f8f9fa; }
+        .container { max-width: 1200px; margin: auto; padding: 20px; }
+        h1, h2 { color: #343a40; border-bottom: 2px solid #dee2e6; padding-bottom: 10px; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 20px; background-color: #fff; box-shadow: 0 2px 3px rgba(0,0,0,0.1); }
+        th, td { border: 1px solid #dee2e6; padding: 12px; text-align: left; }
+        th { background-color: #e9ecef; }
+        .pii-warning { background-color: #fff3cd; border-left: 6px solid #ffc107; padding: 15px; margin-top: 20px; }
+        .pii-ok { background-color: #d4edda; border-left: 6px solid #28a745; padding: 15px; margin-top: 20px; }
+        .card { background: #fff; border: 1px solid #dee2e6; border-radius: 5px; margin-bottom: 20px; box-shadow: 0 2px 3px rgba(0,0,0,0.1); }
+        .card-header { background-color: #e9ecef; padding: 15px; border-bottom: 1px solid #dee2e6; font-weight: bold; }
+        .card-body { padding: 15px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{{ title }}</h1>
+        <p><strong>Source File:</strong> {{ file_path }}</p>
+
+        {% if gemini_summary %}
+        <div class="card">
+            <div class="card-header">AI-Powered Summary</div>
+            <div class="card-body">
+                {{ gemini_summary | safe }}
+            </div>
+        </div>
+        {% endif %}
+
+        <h2>Column Profiles</h2>
+        {% for profile in profile_report %}
+        <div class="card">
+            <div class="card-header">{{ profile.column_name }} ({{ profile.data_type }})</div>
+            <div class="card-body">
+                <table>
+                    <tr>
+                        <th>Metric</th>
+                        <th>Value</th>
+                    </tr>
+                    <tr>
+                        <td>Missing Values</td>
+                        <td>{{ profile.missing_values }} ({{ profile.missing_percentage }}%)</td>
+                    </tr>
+                    <tr>
+                        <td>Unique Values</td>
+                        <td>{{ profile.unique_values }}</td>
+                    </tr>
+                    {% if profile.text_analysis %}
+                        <tr>
+                            <td>Leading/Trailing Whitespace</td>
+                            <td>{{ profile.text_analysis.has_leading_trailing_whitespace }}</td>
+                        </tr>
+                        <tr>
+                            <td>Inconsistent Capitalization</td>
+                            <td>{{ profile.text_analysis.has_inconsistent_capitalization }}</td>
+                        </tr>
+                    {% endif %}
+                    {% if profile.date_analysis %}
+                        <tr>
+                            <td>Potential Date Column</td>
+                            <td>{{ profile.date_analysis.is_potential_date_column }}</td>
+                        </tr>
+                        <tr>
+                            <td>Date Parse Failures</td>
+                            <td>{{ profile.date_analysis.parse_failure_count }}</td>
+                        </tr>
+                    {% endif %}
+                </table>
+                {% if profile.plot %}
+                    <div class="plot-container">
+                        {{ profile.plot | safe }}
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+
+        <h2>PII Scan Results</h2>
+        {% set pii_found = pii_report.values() | select('list') | sum(start=[]) | length > 0 %}
+        {% if pii_found %}
+            <div class="pii-warning">
+                <strong>Warning:</strong> Potential PII detected in the following columns:
+                <ul>
+                {% for pii_type, columns in pii_report.items() %}
+                    {% if columns %}
+                        <li><strong>{{ pii_type }}:</strong> {{ columns | join(', ') }}</li>
+                    {% endif %}
+                {% endfor %}
+                </ul>
+            </div>
+        {% else %}
+            <div class="pii-ok">
+                <strong>OK:</strong> No common PII patterns were detected.
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>
