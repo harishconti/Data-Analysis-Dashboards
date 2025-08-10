@@ -1,5 +1,10 @@
 import polars as pl
 from typing import List, Dict, Any
+import plotly.graph_objects as go
+import plotly.io as pio
+from jinja2 import Environment, FileSystemLoader
+import os
+import google.generativeai as genai
 
 def format_console_report(profile_report: List[Dict[str, Any]], pii_report: Dict[str, List[str]], file_path: str) -> str:
     """
@@ -50,81 +55,91 @@ def format_console_report(profile_report: List[Dict[str, Any]], pii_report: Dict
     report_lines.append("="*50)
     return "\n".join(report_lines)
 
-def generate_html_report(profile_report: List[Dict[str, Any]], pii_report: Dict[str, List[str]], file_path: str, output_filename: str):
+def generate_html_report(profile_report: List[Dict[str, Any]], pii_report: Dict[str, List[str]], file_path: str, output_filename: str, config: Dict[str, Any] = None):
     """
-    Generates a simple HTML report from the analysis results.
+    Generates an interactive HTML report from the analysis results using Jinja2 and Plotly.
     """
-    html = f"""
-    <html>
-    <head>
-        <title>Data Health Check Report</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; }}
-            h1, h2 {{ color: #333; }}
-            table {{ border-collapse: collapse; width: 100%; margin-bottom: 20px; }}
-            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
-            th {{ background-color: #f2f2f2; }}
-            .pii-warning {{ background-color: #ffdddd; border-left: 6px solid #f44336; padding: 10px; margin-top: 20px; }}
-            .pii-ok {{ background-color: #ddffdd; border-left: 6px solid #4CAF50; padding: 10px; margin-top: 20px; }}
-        </style>
-    </head>
-    <body>
-        <h1>Data Health Check Report</h1>
-        <p><strong>Source File:</strong> {file_path}</p>
+    reporting_config = config.get("reporting", {}) if config else {}
+    title = reporting_config.get("html_title", "Data Health Check Report")
 
-        <h2>Column Profiles</h2>
-        <table>
-            <tr>
-                <th>Column Name</th>
-                <th>Data Type</th>
-                <th>Missing (%)</th>
-                <th>Unique Values</th>
-                <th>Potential Issues</th>
-            </tr>
-    """
+    # Set up Jinja2 environment
+    env = Environment(loader=FileSystemLoader("templates"))
+    template = env.get_template("report.html.j2")
 
+    # Generate plots for numeric columns
     for profile in profile_report:
-        issues = []
-        if "text_analysis" in profile:
-            if profile["text_analysis"]["has_leading_trailing_whitespace"]:
-                issues.append("Whitespace")
-            if profile["text_analysis"]["has_inconsistent_capitalization"]:
-                issues.append("Capitalization")
+        if "histogram" in profile:
+            hist_data = profile["histogram"]
 
-        if "date_analysis" in profile:
-            failures = profile['date_analysis']['parse_failure_count']
-            issues.append(f"Date Parse Errors ({failures})")
+            # The histogram from polars gives bin edges, so we have one more edge than count.
+            # We can represent this as a bar chart.
+            fig = go.Figure(data=[go.Bar(
+                x=hist_data["bin_edges"][:-1], # Left edges of bins
+                y=hist_data["counts"],
+                width=[(hist_data["bin_edges"][i+1] - hist_data["bin_edges"][i]) * 0.95 for i in range(len(hist_data["counts"]))] # Bar widths
+            )])
 
-        html += f"""
-            <tr>
-                <td>{profile['column_name']}</td>
-                <td>{profile['data_type']}</td>
-                <td>{profile['missing_percentage']}%</td>
-                <td>{profile['unique_values']}</td>
-                <td>{', '.join(issues) if issues else 'None'}</td>
-            </tr>
-        """
+            fig.update_layout(
+                title_text=f"Distribution of {profile['column_name']}",
+                xaxis_title="Value",
+                yaxis_title="Frequency",
+                bargap=0.05,
+            )
 
-    html += "</table>"
+            # Convert plot to HTML
+            profile["plot"] = pio.to_html(fig, full_html=False, include_plotlyjs='cdn')
 
-    html += "<h2>PII Scan Results</h2>"
-    pii_found = any(columns for columns in pii_report.values())
 
-    if pii_found:
-        html += '<div class="pii-warning">'
-        html += "<strong>Warning:</strong> Potential PII detected in the following columns:"
-        html += "<ul>"
-        for pii_type, columns in pii_report.items():
-            if columns:
-                html += f"<li><strong>{pii_type}:</strong> {', '.join(columns)}</li>"
-        html += "</ul></div>"
-    else:
-        html += '<div class="pii-ok"><strong>OK:</strong> No common PII patterns were detected.</div>'
+    # Generate Gemini summary if enabled
+    gemini_summary = generate_gemini_summary(profile_report, pii_report, config)
 
-    html += """
-    </body>
-    </html>
+    # Render the template
+    html_content = template.render(
+        title=title,
+        file_path=file_path,
+        profile_report=profile_report,
+        pii_report=pii_report,
+        gemini_summary=gemini_summary
+    )
+
+    with open(output_filename, 'w', encoding='utf-8') as f:
+        f.write(html_content)
+
+def generate_gemini_summary(profile_report: List[Dict[str, Any]], pii_report: Dict[str, List[str]], config: Dict[str, Any]) -> str:
     """
+    Generates a summary of the data health check report using the Gemini API.
+    """
+    gemini_config = config.get("gemini", {})
+    if not gemini_config.get("enabled", False):
+        return ""
 
-    with open(output_filename, 'w') as f:
-        f.write(html)
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return "Gemini summary was enabled, but the GOOGLE_API_KEY environment variable is not set."
+
+    genai.configure(api_key=api_key)
+
+    try:
+        model = genai.GenerativeModel(gemini_config.get("model", "gemini-pro"))
+
+        # Sanitize reports for the prompt
+        # We don't need to send everything, just the key insights
+        simplified_profile = [
+            {k: v for k, v in profile.items() if k not in ["histogram", "summary_stats", "plot"]}
+            for profile in profile_report
+        ]
+
+        prompt_template = gemini_config.get("prompt",
+            "You are a data analyst. Based on the following data profile and PII scan results, "
+            "provide a short, high-level summary of the data's health. "
+            "Focus on the most critical issues found.\n\n"
+            "Data Profile: {profile_report}\n\n"
+            "PII Report: {pii_report}"
+        )
+
+        prompt = prompt_template.format(profile_report=simplified_profile, pii_report=pii_report)
+
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"Could not generate Gemini summary. Reason: {e}"

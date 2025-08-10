@@ -1,0 +1,31 @@
+# Configuration for the Data Health Check tool
+
+# Settings for the PII scanner
+pii:
+  # Add custom regex patterns here.
+  # The key is the name of the PII type, and the value is the regex pattern.
+  patterns:
+    email: "[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+"
+    phone: "(\\+\\d{1,3}[-\\s]?)?(\\(?\\d{3}\\)?[-\\s]?)?\\d{3}[-\\s]?\\d{4}"
+    indian_phone: "(?:\\+91)?[-\\s]?[6-9]\\d{9}"
+
+# Settings for report generation
+reporting:
+  # Set to true to generate an HTML report
+  generate_html: true
+  # Set to true to generate a console report
+  generate_console: true
+  # Title for the HTML report
+  html_title: "Data Health Check Report"
+
+# Settings for Gemini API (optional)
+# To use this feature, you need to have the google-generativeai library installed
+# and a GOOGLE_API_KEY environment variable set.
+gemini:
+  # Set to true to enable Gemini report generation
+  enabled: false
+  # The model to use for the report generation
+  model: "gemini-pro"
+  # The prompt to use for the report generation
+  # You can use placeholders like {profile_report} and {pii_report}
+  prompt: "Generate a summary of the data health check report. Here is the profile report: {profile_report}. Here is the PII report: {pii_report}."

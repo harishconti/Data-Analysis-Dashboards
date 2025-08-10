@@ -1,5 +1,6 @@
 import polars as pl
 from typing import List, Dict, Any
+import dateparser
 
 def get_column_profile(df: pl.DataFrame, column_name: str) -> Dict[str, Any]:
     """
@@ -31,6 +32,24 @@ def get_column_profile(df: pl.DataFrame, column_name: str) -> Dict[str, Any]:
         "summary_stats": col.describe().to_dicts()[0]
     }
 
+    # Histogram for numeric columns
+    if col.dtype in [pl.Int64, pl.Int32, pl.Int16, pl.Int8, pl.Float64, pl.Float32]:
+        try:
+            # Drop nulls and NaNs for histogram calculation
+            valid_data = col.drop_nulls().drop_nans()
+            if not valid_data.is_empty():
+                hist = valid_data.hist(bin_count=20)
+                # Extracting the data for plotly
+                hist_data = {
+                    "counts": hist.get_columns()[1].to_list(),
+                    "bin_edges": hist.get_columns()[0].to_list()
+                }
+                profile["histogram"] = hist_data
+        except Exception as e:
+            # In case histogram fails for some reason
+            print(f"Could not generate histogram for column {column_name}: {e}")
+
+
     # Specific analysis for String columns
     if col.dtype == pl.String:
         # Check for leading/trailing whitespace
@@ -52,35 +71,27 @@ def get_column_profile(df: pl.DataFrame, column_name: str) -> Dict[str, Any]:
             "has_inconsistent_capitalization": bool(has_inconsistent_caps)
         }
 
-        # Date analysis for string columns
+        # Date analysis for string columns using dateparser
         non_null_series = col.drop_nulls()
         if not non_null_series.is_empty():
-            try:
-                common_formats = [
-                    "%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%d-%m-%Y", "%m-%d-%Y",
-                    "%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y",
-                ]
+            # Use a sample to avoid parsing the whole column, which can be slow.
+            sample_size = min(len(non_null_series), 100)
+            sample = non_null_series.sample(n=sample_size)
 
-                parse_expr = pl.coalesce(
-                    [col.str.strptime(pl.Datetime, fmt, strict=False) for fmt in common_formats]
-                ).alias("converted")
+            parsed_dates = sample.map_elements(lambda s: dateparser.parse(s) is not None, return_dtype=pl.Boolean)
 
-                converted_series = df.select(parse_expr).get_column("converted")
+            num_parsed = parsed_dates.sum()
 
-                original_non_null_count = col.drop_nulls().len()
-                converted_successfully_count = converted_series.drop_nulls().len()
+            # Heuristic: if > 50% of the sample parses as dates, treat it as a date column
+            if num_parsed / sample_size > 0.5:
+                # Now, let's count the total number of parse failures in the whole column
+                # This is more expensive, so we only do it if we're confident it's a date column
+                total_failures = col.map_elements(lambda s: dateparser.parse(s) is None, return_dtype=pl.Boolean).sum()
 
-                # Heuristic: if > 50% of non-null strings parse as dates, treat it as a date column
-                if original_non_null_count > 0 and (converted_successfully_count / original_non_null_count) > 0.5:
-                    total_parse_failures = original_non_null_count - converted_successfully_count
-                    if total_parse_failures > 0:
-                        profile["date_analysis"] = {
-                            "is_potential_date_column": True,
-                            "parse_failure_count": total_parse_failures
-                        }
-            except Exception:
-                # If anything goes wrong during the complex parsing, just skip it.
-                pass
+                profile["date_analysis"] = {
+                    "is_potential_date_column": True,
+                    "parse_failure_count": total_failures - col.null_count()
+                }
 
     return profile
 

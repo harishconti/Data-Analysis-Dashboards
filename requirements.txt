@@ -8,3 +8,9 @@ streamlit
 dash
 dash-bootstrap-components
 typer
+PyYAML
+dateparser
+Jinja2
+plotly
+google-generativeai
+pytest
