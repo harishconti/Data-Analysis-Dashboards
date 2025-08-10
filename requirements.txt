@@ -7,3 +7,4 @@ streamlit
 # dash based
 dash
 dash-bootstrap-components
+typer
